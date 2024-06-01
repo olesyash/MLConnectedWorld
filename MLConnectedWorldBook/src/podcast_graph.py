@@ -64,66 +64,31 @@ def build_podcast_and_keywords_graph(
     return graph
 
 
-def get_graph_with_credit_info(
-    g_movies_and_keywords: nx.Graph,
-    df_credits: pd.DataFrame,
-    top_n_cast: int = 20,
-) -> nx.MultiGraph:
 
-    credit_edges = []
-    # Process credits to extract relevant information
-    for _, row in tqdm(
-        df_credits.iterrows(), total=len(df_credits), desc="Processing credits"
-    ):
-        cast = json.loads(row.cast)
-        for c in cast:
-            if c["order"] > top_n_cast:
-                continue
-            credit_edges.append(
-                {
-                    "MOVIE": row["title"],
-                    "PERSON": c["name"],
-                    "type": "PARTICIPATED_IN",
-                }
-            )
-        crew = json.loads(row.crew)
-        for c in crew:
-            job = c["job"]
-            if job not in ["Director", "Producer", "Writer", "Screenplay"]:
-                continue
-            credit_edges.append(
-                {"MOVIE": row["title"], "PERSON": c["name"], "type": "WORKED_ON"}
-            )
 
-    df_credit_edges = pd.DataFrame(credit_edges)
+def rank_keywords(graph):
+    keyword_weights = defaultdict(int)
 
-    g_multi = nx.MultiGraph()
+    # Iterate through the edges
+    for podcast, keyword, weight in graph.edges(data=True):
+        keyword_weights[keyword] += weight["weight"]
 
-    # Preserve node attributes including type
-    for node, data in g_movies_and_keywords.nodes(data=True):
-        g_multi.add_node(node, **data)
+    # Sort the dictionary by values (sum of weights) in descending order
+    ranked_keywords = sorted(keyword_weights.items(), key=lambda x: x[1], reverse=True)
 
-    for u, v, data in g_movies_and_keywords.edges(data=True):
-        g_multi.add_edge(u, v, key="HAS_KEYWORD", **data)
+    return ranked_keywords
 
-    # Add the edges to the graph, and add nodes if they don't exist
-    for _, row in tqdm(
-        df_credit_edges.iterrows(), total=len(df_credit_edges), desc="Adding edges"
-    ):
-        movie = row["MOVIE"]
-        person = row["PERSON"]
-        edge_type = row["type"]
+def get_smallest_connected_component_graph(graph: nx.Graph) -> nx.Graph:
+    largest_connected_component = min(nx.connected_components(graph), key=len)
+    return graph.subgraph(largest_connected_component).copy()
 
-        if movie not in g_multi.nodes:
-            g_multi.add_node(movie, type="MOVIE")
-        if person not in g_multi.nodes:
-            g_multi.add_node(person, type="PERSON")
-
-        # Check if the edge already exists with the same type before adding
-        if not g_multi.has_edge(movie, person, key=edge_type):
-            g_multi.add_edge(movie, person, key=edge_type)
-
-    return g_multi
+def get_connected_component_graph(graph: nx.Graph, size_min, size_max) -> nx.Graph:
+    connected_components = nx.connected_components(graph)
+    for component in connected_components:
+        if len(component) < size_max and len(component) > size_min:
+            return graph.subgraph(component).copy()
+    largest_connected_component = max(nx.connected_components(graph), key=len)
+    return graph.subgraph(largest_connected_component).copy()
 
 
 def remove_isolated_nodes(graph: nx.Graph):
@@ -155,9 +120,3 @@ def cleanup_nodes_by_percentile(
     ret.remove_nodes_from(nodes_to_remove)
     return ret
 
-
-
-dir_data = os.path.abspath("C:\olesya\MLConnectedWorld\MLConnectedWorldBook\data")
-fn = os.path.join(dir_data, "podcasts.json")
-df = pd.read_json(fn, orient="records", lines=True)
-G = build_podcast_and_keywords_graph(df = df)
